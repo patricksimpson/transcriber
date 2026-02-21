@@ -1,7 +1,9 @@
 """Video/Audio Transcriber GUI — transcribe media files using faster-whisper."""
 
+import json
 import os
 import queue
+import re
 import subprocess
 import sys
 import threading
@@ -20,6 +22,39 @@ for _nvidia_pkg in ("nvidia.cublas", "nvidia.cudnn"):
             os.environ["PATH"] = _bin + os.pathsep + os.environ.get("PATH", "")
     except Exception:
         pass
+
+MEDIA_EXTENSIONS = {'.mp4', '.mp3', '.wav', '.m4a', '.mkv', '.webm', '.ogg', '.flac', '.aac', '.wma'}
+
+# Proper nouns to capitalize in output (multi-word entries first)
+PROPER_NOUNS = [
+    ("holy spirit", "Holy Spirit"),
+    ("holy ghost", "Holy Ghost"),
+    ("brother branham", "Brother Branham"),
+    ("william branham", "William Branham"),
+    ("lee vayle", "Lee Vayle"),
+    ("jesus", "Jesus"),
+    ("god", "God"),
+    ("christ", "Christ"),
+    ("lord", "Lord"),
+    ("bible", "Bible"),
+    ("branham", "Branham"),
+    ("vayle", "Vayle"),
+    ("scripture", "Scripture"),
+    ("moses", "Moses"),
+    ("abraham", "Abraham"),
+    ("israel", "Israel"),
+    ("satan", "Satan"),
+]
+
+# Seconds of silence between segments to trigger a paragraph break
+PARAGRAPH_GAP = 1.5
+
+# Settings file location
+if getattr(sys, 'frozen', False):
+    _config_dir = Path(sys.executable).parent
+else:
+    _config_dir = Path(__file__).parent
+_config_path = _config_dir / "settings.json"
 
 
 class TranscriberApp:
@@ -40,7 +75,9 @@ class TranscriberApp:
         self._last_output_dir = None
 
         self._build_ui()
+        self._load_settings()
         self._poll_queue()
+        self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 
     # ── UI ────────────────────────────────────────────────────────────
 
@@ -56,6 +93,9 @@ class TranscriberApp:
             side="left", fill="x", expand=True, padx=(4, 4)
         )
         ttk.Button(file_frame, text="Browse", command=self._browse_file).pack(side="left")
+        ttk.Button(file_frame, text="Browse Dir", command=self._browse_directory).pack(
+            side="left", padx=(4, 0)
+        )
 
         # File info row: Load, duration display, Open in player
         info_frame = ttk.Frame(self.root)
@@ -211,6 +251,7 @@ class TranscriberApp:
             if not self.outdir_var.get().strip():
                 self.outdir_var.set(self._last_input_dir)
             self._load_file_info()
+            self._save_settings()
 
     def _load_file_info(self):
         filepath = self.file_var.get().strip()
@@ -255,6 +296,110 @@ class TranscriberApp:
         if path:
             self.outdir_var.set(path)
             self._last_output_dir = path
+            self._save_settings()
+
+    def _browse_directory(self):
+        initial = self._last_input_dir or None
+        path = filedialog.askdirectory(initialdir=initial)
+        if path:
+            self.file_var.set(path)
+            self._last_input_dir = path
+            if not self.outdir_var.get().strip():
+                self.outdir_var.set(path)
+            # List media files found
+            media_files = sorted(
+                f for f in Path(path).iterdir()
+                if f.is_file() and f.suffix.lower() in MEDIA_EXTENSIONS
+            )
+            self.log.configure(state="normal")
+            self.log.delete("1.0", "end")
+            if media_files:
+                self.log.insert("end", f"Found {len(media_files)} media file(s):\n")
+                for f in media_files:
+                    self.log.insert("end", f"  - {f.name}\n")
+            else:
+                self.log.insert("end", "No media files found in this directory.\n")
+            self.log.configure(state="disabled")
+            self._save_settings()
+
+    def _load_settings(self):
+        try:
+            data = json.loads(_config_path.read_text(encoding="utf-8"))
+        except Exception:
+            return
+        if data.get("input_dir"):
+            self._last_input_dir = data["input_dir"]
+        if data.get("output_dir"):
+            self._last_output_dir = data["output_dir"]
+            self.outdir_var.set(data["output_dir"])
+        if data.get("model"):
+            self.model_var.set(data["model"])
+        if data.get("format"):
+            self.format_var.set(data["format"])
+
+    def _save_settings(self):
+        data = {
+            "input_dir": self._last_input_dir or "",
+            "output_dir": self.outdir_var.get().strip(),
+            "model": self.model_var.get(),
+            "format": self.format_var.get(),
+        }
+        try:
+            _config_path.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _on_close(self):
+        self._save_settings()
+        self.root.destroy()
+
+    @staticmethod
+    def _capitalize_proper_nouns(text):
+        for pattern, replacement in PROPER_NOUNS:
+            text = re.sub(r'\b' + re.escape(pattern) + r'\b', replacement, text, flags=re.IGNORECASE)
+        return text
+
+    @staticmethod
+    def _format_plain_output(segments_data):
+        """Format segments into paragraphed, capitalized plain text."""
+        if not segments_data:
+            return ""
+        # Combine all text with proper noun capitalization
+        full_text = " ".join(
+            TranscriberApp._capitalize_proper_nouns(text)
+            for _, _, text in segments_data
+        )
+        # Split into sentences and group into paragraphs
+        sentences = re.split(r'(?<=[.?!])\s+', full_text.strip())
+        if not sentences:
+            return full_text
+        # Prefer gap-based breaks where available, otherwise every ~5 sentences
+        # Build a set of sentence indices that fall right after a significant gap
+        gap_indices = set()
+        char_pos = 0
+        for i in range(len(segments_data) - 1):
+            char_pos += len(segments_data[i][2]) + 1  # +1 for the joining space
+            gap = segments_data[i + 1][0] - segments_data[i][1]
+            if gap >= PARAGRAPH_GAP:
+                # Find which sentence this position falls in
+                running = 0
+                for si, s in enumerate(sentences):
+                    running += len(s) + 1
+                    if running >= char_pos:
+                        gap_indices.add(si)
+                        break
+        paragraphs = []
+        current = []
+        for i, sentence in enumerate(sentences):
+            current.append(sentence)
+            at_gap = i in gap_indices
+            long_enough = len(current) >= 5
+            if (at_gap and len(current) >= 2) or long_enough:
+                paragraphs.append(" ".join(current))
+                current = []
+        if current:
+            paragraphs.append(" ".join(current))
+        return "\n\n".join(paragraphs)
 
     @staticmethod
     def _parse_time(text):
@@ -298,13 +443,29 @@ class TranscriberApp:
     # ── Transcription ─────────────────────────────────────────────────
 
     def _start_transcription(self):
-        filepath = self.file_var.get().strip()
-        if not filepath or not os.path.isfile(filepath):
-            self._log("Error: Please select a valid file.\n")
+        path = self.file_var.get().strip()
+        if not path:
+            self._log("Error: Please select a file or directory.\n")
             return
+
+        if os.path.isdir(path):
+            file_list = sorted(
+                str(f) for f in Path(path).iterdir()
+                if f.is_file() and f.suffix.lower() in MEDIA_EXTENSIONS
+            )
+            if not file_list:
+                self._log("Error: No media files found in the selected directory.\n")
+                return
+        elif os.path.isfile(path):
+            file_list = [path]
+        else:
+            self._log("Error: Please select a valid file or directory.\n")
+            return
+
         if self.transcribing:
             return
 
+        self._save_settings()
         self.transcribing = True
         self._stop_requested = False
         self.transcribe_btn.configure(state="disabled")
@@ -317,7 +478,13 @@ class TranscriberApp:
         self.log.delete("1.0", "end")
         self.log.configure(state="disabled")
 
-        thread = threading.Thread(target=self._transcribe_worker, args=(filepath,), daemon=True)
+        if len(file_list) > 1:
+            self._log(f"Batch: {len(file_list)} media files to process\n")
+            for f in file_list:
+                self._log(f"  - {Path(f).name}\n")
+            self._log("\n")
+
+        thread = threading.Thread(target=self._transcribe_worker, args=(file_list,), daemon=True)
         thread.start()
 
     def _stop_transcription(self):
@@ -326,9 +493,21 @@ class TranscriberApp:
             self.stop_btn.configure(state="disabled")
             self._set_status("Stopping... saving progress")
 
-    def _transcribe_worker(self, filepath):
+    def _transcribe_worker(self, file_list):
         try:
-            self._run_transcription(filepath)
+            total_files = len(file_list)
+            for idx, filepath in enumerate(file_list, 1):
+                if self._stop_requested:
+                    self._log(f"\nBatch stopped — skipping remaining {total_files - idx + 1} file(s).\n")
+                    break
+                if total_files > 1:
+                    self._set_status(f"File {idx}/{total_files}: {Path(filepath).name}")
+                    self._log(f"{'=' * 50}\nFile {idx}/{total_files}: {Path(filepath).name}\n{'=' * 50}\n")
+                    self._set_progress(0, "")
+                self._run_transcription(filepath)
+            if total_files > 1 and not self._stop_requested:
+                self._log(f"\nBatch complete — {total_files} files processed.\n")
+                self._set_status("Batch complete")
         except Exception as e:
             self._log(f"\nError: {e}\n")
             self._set_status("Error")
@@ -424,8 +603,7 @@ class TranscriberApp:
 
         segments_iter, info = model.transcribe(filepath, **kwargs)
 
-        timestamped_lines = []
-        plain_lines = []
+        segments_data = []  # (start, end, text) tuples
         wall_start = time.time()
         stopped = False
 
@@ -434,12 +612,11 @@ class TranscriberApp:
                 stopped = True
                 break
 
+            text = seg.text.strip()
+            segments_data.append((seg.start, seg.end, text))
+
             ts = self._format_time(seg.start)
             te = self._format_time(seg.end)
-            text = seg.text.strip()
-
-            timestamped_lines.append(f"[{ts} -> {te}]  {text}")
-            plain_lines.append(text)
             self._log(f"[{ts} -> {te}]  {text}\n")
 
             # Update progress bar and ETA
@@ -469,7 +646,7 @@ class TranscriberApp:
             self._set_progress(100, "Complete")
 
         # Save whatever we have
-        if not plain_lines:
+        if not segments_data:
             self._log("Nothing to save.\n")
             self._set_status("Stopped — nothing saved")
             return
@@ -479,16 +656,21 @@ class TranscriberApp:
         base_name = f"{src.stem}{time_label}{partial}"
 
         if fmt in ("timestamped", "both"):
+            ts_lines = []
+            for start, end, txt in segments_data:
+                ts = self._format_time(start)
+                te = self._format_time(end)
+                ts_lines.append(f"[{ts} -> {te}]  {self._capitalize_proper_nouns(txt)}")
             out_ts = outdir / f"{base_name} (timestamped).txt"
-            out_ts.write_text("\n".join(timestamped_lines), encoding="utf-8")
+            out_ts.write_text("\n".join(ts_lines), encoding="utf-8")
             self._log(f"Saved: {out_ts}\n")
 
         if fmt in ("plain", "both"):
             out_plain = outdir / f"{base_name}.txt"
-            out_plain.write_text("\n".join(plain_lines), encoding="utf-8")
+            out_plain.write_text(self._format_plain_output(segments_data), encoding="utf-8")
             self._log(f"Saved: {out_plain}\n")
 
-        total_segments = len(plain_lines)
+        total_segments = len(segments_data)
         status_word = "Stopped" if stopped else "Done"
         self._log(
             f"\n{status_word} — {total_segments} segments transcribed "
