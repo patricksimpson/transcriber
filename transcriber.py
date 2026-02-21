@@ -26,12 +26,14 @@ class TranscriberApp:
     def __init__(self, root):
         self.root = root
         self.root.title("Transcriber")
-        self.root.geometry("720x580")
-        self.root.minsize(650, 500)
+        self.root.geometry("720x620")
+        self.root.minsize(650, 540)
 
         self.msg_queue = queue.Queue()
         self.transcribing = False
+        self._stop_requested = False
         self.cuda_available = self._detect_cuda()
+        self._file_duration = None
 
         # Remember last-used directories
         self._last_input_dir = None
@@ -82,7 +84,6 @@ class TranscriberApp:
         # Time range row
         time_frame = ttk.Frame(self.root)
         time_frame.pack(fill="x", **pad)
-
         ttk.Label(time_frame, text="Start time:").pack(side="left")
         self.start_var = tk.StringVar()
         ttk.Entry(time_frame, textvariable=self.start_var, width=8).pack(
@@ -97,10 +98,9 @@ class TranscriberApp:
             side="left", padx=(8, 0)
         )
 
-        # Model + Device row
+        # Model row (+ Device if GPU available)
         model_frame = ttk.Frame(self.root)
         model_frame.pack(fill="x", **pad)
-
         ttk.Label(model_frame, text="Model:").pack(side="left")
         self.model_var = tk.StringVar(value="base.en")
         ttk.Combobox(
@@ -111,16 +111,18 @@ class TranscriberApp:
             width=12,
         ).pack(side="left", padx=(4, 0))
 
-        ttk.Label(model_frame, text="Device:").pack(side="left", padx=(16, 0))
-        default_device = "Auto (GPU)" if self.cuda_available else "Auto (CPU)"
-        self.device_var = tk.StringVar(value=default_device)
-        ttk.Combobox(
-            model_frame,
-            textvariable=self.device_var,
-            values=[default_device, "GPU", "CPU"],
-            state="readonly",
-            width=12,
-        ).pack(side="left", padx=(4, 0))
+        if self.cuda_available:
+            ttk.Label(model_frame, text="Device:").pack(side="left", padx=(16, 0))
+            self.device_var = tk.StringVar(value="Auto (GPU)")
+            ttk.Combobox(
+                model_frame,
+                textvariable=self.device_var,
+                values=["Auto (GPU)", "GPU", "CPU"],
+                state="readonly",
+                width=12,
+            ).pack(side="left", padx=(4, 0))
+        else:
+            self.device_var = tk.StringVar(value="CPU")
 
         # Output format
         fmt_frame = ttk.LabelFrame(self.root, text="Output format")
@@ -135,11 +137,31 @@ class TranscriberApp:
                 side="left", padx=8, pady=4
             )
 
-        # Transcribe button
+        # Button row
+        btn_frame = ttk.Frame(self.root)
+        btn_frame.pack(fill="x", **pad)
         self.transcribe_btn = ttk.Button(
-            self.root, text="Transcribe", command=self._start_transcription
+            btn_frame, text="Transcribe", command=self._start_transcription
         )
-        self.transcribe_btn.pack(**pad)
+        self.transcribe_btn.pack(side="left", padx=(0, 4))
+        self.stop_btn = ttk.Button(
+            btn_frame, text="Stop (save progress)", command=self._stop_transcription,
+            state="disabled"
+        )
+        self.stop_btn.pack(side="left")
+
+        # Progress bar + ETA label
+        progress_frame = ttk.Frame(self.root)
+        progress_frame.pack(fill="x", **pad)
+        self.progress_var = tk.DoubleVar(value=0)
+        self.progress_bar = ttk.Progressbar(
+            progress_frame, variable=self.progress_var, maximum=100, length=400
+        )
+        self.progress_bar.pack(side="left", fill="x", expand=True, padx=(0, 8))
+        self.eta_var = tk.StringVar(value="")
+        ttk.Label(progress_frame, textvariable=self.eta_var, font=("Consolas", 9)).pack(
+            side="left"
+        )
 
         # Log area
         log_frame = ttk.Frame(self.root)
@@ -186,10 +208,8 @@ class TranscriberApp:
         if path:
             self.file_var.set(path)
             self._last_input_dir = str(Path(path).parent)
-            # Only set output dir if it's empty
             if not self.outdir_var.get().strip():
                 self.outdir_var.set(self._last_input_dir)
-            # Auto-load file info
             self._load_file_info()
 
     def _load_file_info(self):
@@ -249,20 +269,25 @@ class TranscriberApp:
             minutes, seconds = parts
             return int(minutes) * 60 + int(seconds)
         else:
-            return float(text) * 60  # treat bare number as minutes
+            return float(text) * 60
 
     def _log(self, text):
-        """Queue a message to be appended to the log from any thread."""
         self.msg_queue.put(text)
 
     def _set_status(self, text):
         self.msg_queue.put(("__STATUS__", text))
+
+    def _set_progress(self, pct, eta_text):
+        self.msg_queue.put(("__PROGRESS__", pct, eta_text))
 
     def _poll_queue(self):
         while not self.msg_queue.empty():
             item = self.msg_queue.get_nowait()
             if isinstance(item, tuple) and item[0] == "__STATUS__":
                 self.status_var.set(item[1])
+            elif isinstance(item, tuple) and item[0] == "__PROGRESS__":
+                self.progress_var.set(item[1])
+                self.eta_var.set(item[2])
             else:
                 self.log.configure(state="normal")
                 self.log.insert("end", item)
@@ -281,7 +306,11 @@ class TranscriberApp:
             return
 
         self.transcribing = True
+        self._stop_requested = False
         self.transcribe_btn.configure(state="disabled")
+        self.stop_btn.configure(state="normal")
+        self.progress_var.set(0)
+        self.eta_var.set("")
 
         # Clear log
         self.log.configure(state="normal")
@@ -291,6 +320,12 @@ class TranscriberApp:
         thread = threading.Thread(target=self._transcribe_worker, args=(filepath,), daemon=True)
         thread.start()
 
+    def _stop_transcription(self):
+        if self.transcribing:
+            self._stop_requested = True
+            self.stop_btn.configure(state="disabled")
+            self._set_status("Stopping... saving progress")
+
     def _transcribe_worker(self, filepath):
         try:
             self._run_transcription(filepath)
@@ -299,7 +334,9 @@ class TranscriberApp:
             self._set_status("Error")
         finally:
             self.transcribing = False
+            self._stop_requested = False
             self.root.after(0, lambda: self.transcribe_btn.configure(state="normal"))
+            self.root.after(0, lambda: self.stop_btn.configure(state="disabled"))
 
     def _run_transcription(self, filepath):
         from faster_whisper import WhisperModel
@@ -368,18 +405,17 @@ class TranscriberApp:
             )
             time_label = f" ({self._format_time_safe(audio_start)}-{self._format_time_safe(audio_end)})"
         else:
-            # Full file — get duration for ETA
-            duration = getattr(self, "_file_duration", None)
+            duration = self._file_duration
             if duration is None:
                 duration = self._get_duration(filepath)
             if duration:
                 audio_end = duration
 
-        # Total audio seconds to transcribe (for ETA)
         total_audio = (audio_end - audio_start) if audio_end else None
 
         # Transcribe
         self._set_status("Transcribing...")
+        self._set_progress(0, "Estimating...")
         self._log("Transcribing...\n" + "-" * 50 + "\n")
 
         kwargs = {"beam_size": 5, "language": "en"}
@@ -391,8 +427,13 @@ class TranscriberApp:
         timestamped_lines = []
         plain_lines = []
         wall_start = time.time()
+        stopped = False
 
         for seg in segments_iter:
+            if self._stop_requested:
+                stopped = True
+                break
+
             ts = self._format_time(seg.start)
             te = self._format_time(seg.end)
             text = seg.text.strip()
@@ -401,26 +442,41 @@ class TranscriberApp:
             plain_lines.append(text)
             self._log(f"[{ts} -> {te}]  {text}\n")
 
-            # Update ETA in status bar
+            # Update progress bar and ETA
             if total_audio and total_audio > 0:
                 audio_done = seg.end - audio_start
                 elapsed = time.time() - wall_start
-                if audio_done > 0 and elapsed > 2:
+                pct = min(100, audio_done / total_audio * 100)
+
+                if audio_done > 0 and elapsed > 1:
                     speed = audio_done / elapsed
                     remaining_audio = total_audio - audio_done
                     eta_sec = max(0, remaining_audio / speed)
-                    pct = min(100, audio_done / total_audio * 100)
-                    self._set_status(
-                        f"Transcribing... {pct:.0f}% — "
-                        f"~{self._format_time(eta_sec)} remaining"
+                    self._set_progress(
+                        pct,
+                        f"{pct:.0f}%  ~{self._format_time(eta_sec)} left"
                     )
+                else:
+                    self._set_progress(pct, f"{pct:.0f}%")
 
         elapsed_total = time.time() - wall_start
-        self._log("-" * 50 + "\n")
 
-        # Build output filenames
+        if stopped:
+            self._log("\n" + "-" * 50 + "\n")
+            self._log("Stopped by user.\n")
+        else:
+            self._log("-" * 50 + "\n")
+            self._set_progress(100, "Complete")
+
+        # Save whatever we have
+        if not plain_lines:
+            self._log("Nothing to save.\n")
+            self._set_status("Stopped — nothing saved")
+            return
+
         src = Path(filepath)
-        base_name = f"{src.stem}{time_label}"
+        partial = " (partial)" if stopped else ""
+        base_name = f"{src.stem}{time_label}{partial}"
 
         if fmt in ("timestamped", "both"):
             out_ts = outdir / f"{base_name} (timestamped).txt"
@@ -433,25 +489,23 @@ class TranscriberApp:
             self._log(f"Saved: {out_plain}\n")
 
         total_segments = len(plain_lines)
+        status_word = "Stopped" if stopped else "Done"
         self._log(
-            f"\nDone — {total_segments} segments transcribed "
+            f"\n{status_word} — {total_segments} segments transcribed "
             f"in {self._format_time(elapsed_total)}.\n"
         )
-        self._set_status("Done")
+        self._set_status(status_word)
 
     def _get_duration(self, filepath):
-        """Get media duration in seconds using PyAV (bundled with faster-whisper)."""
         try:
             import av
-
             with av.open(filepath) as container:
-                return float(container.duration) / 1_000_000  # microseconds -> seconds
+                return float(container.duration) / 1_000_000
         except Exception:
             return None
 
     @staticmethod
     def _format_time(seconds):
-        """Format seconds as HH:MM:SS."""
         h = int(seconds // 3600)
         m = int((seconds % 3600) // 60)
         s = int(seconds % 60)
@@ -459,7 +513,6 @@ class TranscriberApp:
 
     @staticmethod
     def _format_time_safe(seconds):
-        """Format seconds as HH.MM.SS (safe for filenames)."""
         h = int(seconds // 3600)
         m = int((seconds % 3600) // 60)
         s = int(seconds % 60)
