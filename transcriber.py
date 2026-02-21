@@ -19,6 +19,7 @@ class TranscriberApp:
 
         self.msg_queue = queue.Queue()
         self.transcribing = False
+        self.cuda_available = self._detect_cuda()
 
         self._build_ui()
         self._poll_queue()
@@ -80,7 +81,7 @@ class TranscriberApp:
             side="left", padx=(8, 0)
         )
 
-        # Model row
+        # Model + Device row
         model_frame = ttk.Frame(self.root)
         model_frame.pack(fill="x", **pad)
 
@@ -90,6 +91,17 @@ class TranscriberApp:
             model_frame,
             textvariable=self.model_var,
             values=["tiny.en", "base.en", "small.en", "medium.en"],
+            state="readonly",
+            width=12,
+        ).pack(side="left", padx=(4, 0))
+
+        ttk.Label(model_frame, text="Device:").pack(side="left", padx=(16, 0))
+        default_device = "Auto (GPU)" if self.cuda_available else "Auto (CPU)"
+        self.device_var = tk.StringVar(value=default_device)
+        ttk.Combobox(
+            model_frame,
+            textvariable=self.device_var,
+            values=[default_device, "GPU", "CPU"],
             state="readonly",
             width=12,
         ).pack(side="left", padx=(4, 0))
@@ -127,6 +139,17 @@ class TranscriberApp:
         ttk.Label(self.root, textvariable=self.status_var, relief="sunken", anchor="w").pack(
             fill="x", side="bottom"
         )
+
+    # ── Device detection ────────────────────────────────────────────
+
+    @staticmethod
+    def _detect_cuda():
+        try:
+            import ctranslate2
+            ctranslate2.get_supported_compute_types("cuda")
+            return True
+        except Exception:
+            return False
 
     # ── Helpers ───────────────────────────────────────────────────────
 
@@ -275,10 +298,22 @@ class TranscriberApp:
         else:
             outdir = Path(filepath).parent
 
+        # Resolve device
+        device_choice = self.device_var.get()
+        if device_choice == "GPU":
+            device, compute_type = "cuda", "float16"
+        elif device_choice == "CPU":
+            device, compute_type = "cpu", "int8"
+        else:  # Auto
+            if self.cuda_available:
+                device, compute_type = "cuda", "float16"
+            else:
+                device, compute_type = "cpu", "int8"
+
         self._set_status("Loading model...")
-        self._log(f"Loading model '{model_name}'...\n")
-        model = WhisperModel(model_name, device="cpu", compute_type="int8")
-        self._log("Model loaded.\n\n")
+        self._log(f"Loading model '{model_name}' on {device.upper()}...\n")
+        model = WhisperModel(model_name, device=device, compute_type=compute_type)
+        self._log(f"Model loaded ({device.upper()}, {compute_type}).\n\n")
 
         # Build clip_timestamps from start/end
         clip_timestamps = None
