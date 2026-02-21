@@ -9,6 +9,17 @@ import tkinter as tk
 from tkinter import filedialog, ttk
 from pathlib import Path
 
+# Add NVIDIA CUDA DLL directories to search path (for GPU support)
+for _nvidia_pkg in ("nvidia.cublas", "nvidia.cudnn"):
+    try:
+        _pkg = __import__(_nvidia_pkg, fromlist=[""])
+        _bin = os.path.join(_pkg.__spec__.submodule_search_locations[0], "bin")
+        if os.path.isdir(_bin):
+            os.add_dll_directory(_bin)
+            os.environ["PATH"] = _bin + os.pathsep + os.environ.get("PATH", "")
+    except Exception:
+        pass
+
 
 class TranscriberApp:
     def __init__(self, root):
