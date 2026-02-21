@@ -183,8 +183,8 @@ class TranscriberApp:
     @staticmethod
     def _detect_cuda():
         try:
-            import ctranslate2
-            ctranslate2.get_supported_compute_types("cuda")
+            import nvidia.cublas  # noqa: F401 — only present in GPU builds
+            import nvidia.cudnn  # noqa: F401
             return True
         except Exception:
             return False
