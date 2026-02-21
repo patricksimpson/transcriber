@@ -2,7 +2,7 @@
 
 Transcribe video and audio files to text using AI speech recognition. Runs entirely on your computer — no audio is sent anywhere.
 
-<img width="721" height="610" alt="image" src="https://github.com/user-attachments/assets/222aec8e-17ba-4003-a74d-ff421a228b1b" />
+<img width="718" height="648" alt="image" src="https://github.com/user-attachments/assets/643e5641-33d7-4fce-b194-ad0647f895d8" />
 
 
 ## Download
