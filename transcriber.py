@@ -5,6 +5,7 @@ import queue
 import subprocess
 import sys
 import threading
+import time
 import tkinter as tk
 from tkinter import filedialog, ttk
 from pathlib import Path
@@ -31,6 +32,10 @@ class TranscriberApp:
         self.msg_queue = queue.Queue()
         self.transcribing = False
         self.cuda_available = self._detect_cuda()
+
+        # Remember last-used directories
+        self._last_input_dir = None
+        self._last_output_dir = None
 
         self._build_ui()
         self._poll_queue()
@@ -165,17 +170,25 @@ class TranscriberApp:
     # ── Helpers ───────────────────────────────────────────────────────
 
     def _browse_file(self):
+        initial = self._last_input_dir
+        if not initial:
+            current = self.file_var.get().strip()
+            if current and os.path.isfile(current):
+                initial = str(Path(current).parent)
+
         path = filedialog.askopenfilename(
+            initialdir=initial,
             filetypes=[
                 ("Media files", "*.mp4 *.mp3 *.wav *.m4a *.mkv *.webm *.ogg *.flac *.aac *.wma"),
                 ("All files", "*.*"),
-            ]
+            ],
         )
         if path:
             self.file_var.set(path)
-            # Default output dir to the file's directory if not already set
+            self._last_input_dir = str(Path(path).parent)
+            # Only set output dir if it's empty
             if not self.outdir_var.get().strip():
-                self.outdir_var.set(str(Path(path).parent))
+                self.outdir_var.set(self._last_input_dir)
             # Auto-load file info
             self._load_file_info()
 
@@ -193,11 +206,13 @@ class TranscriberApp:
                 self.load_btn.configure(state="normal")
                 self.open_btn.configure(state="normal")
                 if duration is not None:
+                    self._file_duration = duration
                     self.duration_var.set(
                         f"Duration: {self._format_time(duration)}  "
                         f"({duration / 60:.1f} min)"
                     )
                 else:
+                    self._file_duration = None
                     self.duration_var.set("Could not read duration")
             self.root.after(0, _update)
 
@@ -207,7 +222,6 @@ class TranscriberApp:
         filepath = self.file_var.get().strip()
         if not filepath or not os.path.isfile(filepath):
             return
-        # os.startfile on Windows, xdg-open on Linux, open on Mac
         if os.name == "nt":
             os.startfile(filepath)
         elif sys.platform == "darwin":
@@ -216,9 +230,11 @@ class TranscriberApp:
             subprocess.Popen(["xdg-open", filepath])
 
     def _browse_outdir(self):
-        path = filedialog.askdirectory()
+        initial = self._last_output_dir or self.outdir_var.get().strip() or None
+        path = filedialog.askdirectory(initialdir=initial)
         if path:
             self.outdir_var.set(path)
+            self._last_output_dir = path
 
     @staticmethod
     def _parse_time(text):
@@ -329,25 +345,38 @@ class TranscriberApp:
         # Build clip_timestamps from start/end
         clip_timestamps = None
         time_label = ""
+        audio_start = 0
+        audio_end = None
+
         if start_sec is not None or end_sec is not None:
             self._set_status("Reading file duration...")
             self._log("Reading file duration...\n")
             duration = self._get_duration(filepath)
 
-            actual_start = start_sec if start_sec is not None else 0
-            actual_end = end_sec if end_sec is not None else (duration or 0)
+            audio_start = start_sec if start_sec is not None else 0
+            audio_end = end_sec if end_sec is not None else (duration or 0)
 
             if duration:
                 self._log(f"Duration: {self._format_time(duration)}\n")
-                if actual_end > duration:
-                    actual_end = duration
+                if audio_end > duration:
+                    audio_end = duration
 
-            clip_timestamps = f"{actual_start},{actual_end}"
+            clip_timestamps = f"{audio_start},{audio_end}"
             self._log(
-                f"Transcribing: {self._format_time(actual_start)} -> "
-                f"{self._format_time(actual_end)}\n\n"
+                f"Transcribing: {self._format_time(audio_start)} -> "
+                f"{self._format_time(audio_end)}\n\n"
             )
-            time_label = f" ({self._format_time_safe(actual_start)}-{self._format_time_safe(actual_end)})"
+            time_label = f" ({self._format_time_safe(audio_start)}-{self._format_time_safe(audio_end)})"
+        else:
+            # Full file — get duration for ETA
+            duration = getattr(self, "_file_duration", None)
+            if duration is None:
+                duration = self._get_duration(filepath)
+            if duration:
+                audio_end = duration
+
+        # Total audio seconds to transcribe (for ETA)
+        total_audio = (audio_end - audio_start) if audio_end else None
 
         # Transcribe
         self._set_status("Transcribing...")
@@ -361,6 +390,7 @@ class TranscriberApp:
 
         timestamped_lines = []
         plain_lines = []
+        wall_start = time.time()
 
         for seg in segments_iter:
             ts = self._format_time(seg.start)
@@ -369,9 +399,23 @@ class TranscriberApp:
 
             timestamped_lines.append(f"[{ts} -> {te}]  {text}")
             plain_lines.append(text)
-
             self._log(f"[{ts} -> {te}]  {text}\n")
 
+            # Update ETA in status bar
+            if total_audio and total_audio > 0:
+                audio_done = seg.end - audio_start
+                elapsed = time.time() - wall_start
+                if audio_done > 0 and elapsed > 2:
+                    speed = audio_done / elapsed
+                    remaining_audio = total_audio - audio_done
+                    eta_sec = max(0, remaining_audio / speed)
+                    pct = min(100, audio_done / total_audio * 100)
+                    self._set_status(
+                        f"Transcribing... {pct:.0f}% — "
+                        f"~{self._format_time(eta_sec)} remaining"
+                    )
+
+        elapsed_total = time.time() - wall_start
         self._log("-" * 50 + "\n")
 
         # Build output filenames
@@ -389,7 +433,10 @@ class TranscriberApp:
             self._log(f"Saved: {out_plain}\n")
 
         total_segments = len(plain_lines)
-        self._log(f"\nDone — {total_segments} segments transcribed.\n")
+        self._log(
+            f"\nDone — {total_segments} segments transcribed "
+            f"in {self._format_time(elapsed_total)}.\n"
+        )
         self._set_status("Done")
 
     def _get_duration(self, filepath):
