@@ -407,46 +407,62 @@ class TranscriberApp:
         return text
 
     @staticmethod
-    def _format_plain_output(segments_data):
-        """Format segments into paragraphed, capitalized plain text."""
+    def _format_plain_output(segments_data, max_paragraph_words=500):
+        """Format segments into paragraphed, capitalized plain text.
+
+        Groups segments by timestamp gaps BEFORE joining text, so paragraph
+        breaks stay accurate regardless of text transformations.
+        """
         if not segments_data:
             return ""
-        # Combine all text with proper noun capitalization
-        full_text = " ".join(
-            TranscriberApp._capitalize_proper_nouns(text)
-            for _, _, text in segments_data
-        )
-        # Split into sentences and group into paragraphs
-        sentences = re.split(r'(?<=[.?!])\s+', full_text.strip())
-        if not sentences:
-            return full_text
-        # Prefer gap-based breaks where available, otherwise every ~5 sentences
-        # Build a set of sentence indices that fall right after a significant gap
-        gap_indices = set()
-        char_pos = 0
-        for i in range(len(segments_data) - 1):
-            char_pos += len(segments_data[i][2]) + 1  # +1 for the joining space
-            gap = segments_data[i + 1][0] - segments_data[i][1]
+
+        # 1. Group segments by timestamp gaps
+        groups = []       # list of lists of text strings
+        current_group = [segments_data[0][2]]
+        for i in range(1, len(segments_data)):
+            gap = segments_data[i][0] - segments_data[i - 1][1]
             if gap >= PARAGRAPH_GAP:
-                # Find which sentence this position falls in
-                running = 0
-                for si, s in enumerate(sentences):
-                    running += len(s) + 1
-                    if running >= char_pos:
-                        gap_indices.add(si)
-                        break
+                groups.append(current_group)
+                current_group = []
+            current_group.append(segments_data[i][2])
+        groups.append(current_group)
+
+        # 2. For each group, join text and capitalize proper nouns → one paragraph
         paragraphs = []
-        current = []
-        for i, sentence in enumerate(sentences):
-            current.append(sentence)
-            at_gap = i in gap_indices
-            long_enough = len(current) >= 5
-            if (at_gap and len(current) >= 2) or long_enough:
-                paragraphs.append(" ".join(current))
-                current = []
-        if current:
-            paragraphs.append(" ".join(current))
+        for group in groups:
+            text = TranscriberApp._capitalize_proper_nouns(" ".join(group)).strip()
+            if not text:
+                continue
+            # 3. Safety net: split overly long paragraphs at sentence boundaries
+            if len(text.split()) > max_paragraph_words:
+                paragraphs.extend(TranscriberApp._split_long_paragraph(text, max_paragraph_words))
+            else:
+                paragraphs.append(text)
+
         return "\n\n".join(paragraphs)
+
+    @staticmethod
+    def _split_long_paragraph(text, max_words):
+        """Split a long paragraph into chunks of ~max_words at sentence boundaries."""
+        # Split at sentence endings
+        sentences = re.split(r'(?<=[.?!])\s+', text)
+        if len(sentences) <= 1:
+            return [text]
+
+        chunks = []
+        current = []
+        current_words = 0
+        for sentence in sentences:
+            sw = len(sentence.split())
+            current.append(sentence)
+            current_words += sw
+            if current_words >= max_words and len(current) >= 2:
+                chunks.append(" ".join(current))
+                current = []
+                current_words = 0
+        if current:
+            chunks.append(" ".join(current))
+        return chunks
 
     @staticmethod
     def _parse_time(text):
