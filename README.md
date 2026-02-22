@@ -6,12 +6,14 @@ Transcribe video and audio files to text using AI speech recognition. Runs entir
 
 ## Download
 
-| Platform | Link |
-|----------|------|
-| Windows (x64) | [Transcriber-windows-x64.zip](../../releases/latest/download/Transcriber-windows-x64.zip) |
-| macOS (Apple Silicon) | [Transcriber-macos-arm64.zip](../../releases/latest/download/Transcriber-macos-arm64.zip) |
-| macOS (Intel) | [Transcriber-macos-x64.zip](../../releases/latest/download/Transcriber-macos-x64.zip) |
-| Linux (x64) | [Transcriber-linux-x64.zip](../../releases/latest/download/Transcriber-linux-x64.zip) |
+| Platform | Link | Size |
+|----------|------|------|
+| Windows (x64, GPU) | [Transcriber-windows-x64.zip](../../releases/latest/download/Transcriber-windows-x64.zip) | ~150 MB |
+| Windows (x64, CPU-only) | [Transcriber-windows-x64-light.zip](../../releases/latest/download/Transcriber-windows-x64-light.zip) | ~30 MB |
+| macOS (Apple Silicon) | [Transcriber-macos-arm64.zip](../../releases/latest/download/Transcriber-macos-arm64.zip) | ~30 MB |
+| Linux (x64) | [Transcriber-linux-x64.zip](../../releases/latest/download/Transcriber-linux-x64.zip) | ~30 MB |
+
+> **Note:** File sizes are approximate. The Windows GPU build is larger because it includes NVIDIA CUDA libraries.
 
 No install required — download, unzip, and run.
 
