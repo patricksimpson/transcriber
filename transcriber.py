@@ -60,8 +60,9 @@ _STYLE_FILENAME = "sermon-style.json"
 def _load_style():
     """Load sermon-style.json from (a) script/exe dir or (b) cwd. Returns (proper_nouns, paragraph_gap, path_or_None)."""
     candidates = []
-    # (a) same dir as script/exe
+    # (a) bundled inside PyInstaller executable
     if getattr(sys, 'frozen', False):
+        candidates.append(Path(sys._MEIPASS) / _STYLE_FILENAME)
         candidates.append(Path(sys.executable).parent / _STYLE_FILENAME)
     else:
         candidates.append(Path(__file__).parent / _STYLE_FILENAME)
@@ -108,6 +109,7 @@ class TranscriberApp:
         self._stop_requested = False
         self.cuda_available = self._detect_cuda()
         self._file_duration = None
+        self._last_output_path = None  # last saved file or directory for "Open Output"
 
         # Remember last-used directories
         self._last_input_dir = None
@@ -236,6 +238,10 @@ class TranscriberApp:
             btn_frame, text="Reformat", command=self._reformat_file
         )
         self.reformat_btn.pack(side="left", padx=(4, 0))
+        self.open_output_btn = ttk.Button(
+            btn_frame, text="Open Output", command=self._open_output, state="disabled"
+        )
+        self.open_output_btn.pack(side="left", padx=(4, 0))
 
         # Progress bar + ETA label
         progress_frame = ttk.Frame(self.root)
@@ -326,16 +332,26 @@ class TranscriberApp:
 
         threading.Thread(target=_worker, daemon=True).start()
 
+    def _open_output(self):
+        path = self._last_output_path
+        if not path or not os.path.exists(path):
+            return
+        self._open_path(path)
+
+    @staticmethod
+    def _open_path(path):
+        if os.name == "nt":
+            os.startfile(path)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", path])
+        else:
+            subprocess.Popen(["xdg-open", path])
+
     def _open_in_player(self):
         filepath = self.file_var.get().strip()
         if not filepath or not os.path.isfile(filepath):
             return
-        if os.name == "nt":
-            os.startfile(filepath)
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", filepath])
-        else:
-            subprocess.Popen(["xdg-open", filepath])
+        self._open_path(filepath)
 
     def _browse_outdir(self):
         initial = self._last_output_dir or self.outdir_var.get().strip() or None
@@ -568,6 +584,13 @@ class TranscriberApp:
                     self._log(f"{'=' * 50}\nFile {idx}/{total_files}: {Path(filepath).name}\n{'=' * 50}\n")
                     self._set_progress(0, "")
                 self._run_transcription(filepath)
+            if total_files > 1:
+                # For batch mode, open the output directory
+                outdir_text = self.outdir_var.get().strip()
+                if outdir_text and os.path.isdir(outdir_text):
+                    self._last_output_path = outdir_text
+                else:
+                    self._last_output_path = str(Path(file_list[0]).parent)
             if total_files > 1 and not self._stop_requested:
                 self._log(f"\nBatch complete — {total_files} files processed.\n")
                 self._set_status("Batch complete")
@@ -579,6 +602,8 @@ class TranscriberApp:
             self._stop_requested = False
             self.root.after(0, lambda: self.transcribe_btn.configure(state="normal"))
             self.root.after(0, lambda: self.stop_btn.configure(state="disabled"))
+            if self._last_output_path:
+                self.root.after(0, lambda: self.open_output_btn.configure(state="normal"))
 
     def _run_transcription(self, filepath):
         from faster_whisper import WhisperModel
@@ -732,6 +757,12 @@ class TranscriberApp:
             out_plain = outdir / f"{base_name}.txt"
             out_plain.write_text(self._format_plain_output(segments_data), encoding="utf-8")
             self._log(f"Saved: {out_plain}\n")
+
+        # Track output path for "Open Output" button
+        if fmt in ("plain", "both"):
+            self._last_output_path = str(out_plain)
+        elif fmt == "timestamped":
+            self._last_output_path = str(out_ts)
 
         total_segments = len(segments_data)
         status_word = "Stopped" if stopped else "Done"
