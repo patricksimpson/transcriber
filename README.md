@@ -9,6 +9,7 @@ Transcribe video and audio files to text using AI speech recognition. Runs entir
 | Platform | Link | Size |
 |----------|------|------|
 | Windows (x64, GPU) | [Transcriber-windows-x64.zip](../../releases/latest/download/Transcriber-windows-x64.zip) | ~1.2 GB |
+| Windows (x64, CPU-only) | [Transcriber-windows-x64-light.zip](../../releases/latest/download/Transcriber-windows-x64-light.zip) | ~30 MB |
 | macOS (Apple Silicon) | [Transcriber-macos-arm64.zip](../../releases/latest/download/Transcriber-macos-arm64.zip) | ~127 MB |
 | Linux (x64) | [Transcriber-linux-x64.zip](../../releases/latest/download/Transcriber-linux-x64.zip) | ~138 MB |
 
