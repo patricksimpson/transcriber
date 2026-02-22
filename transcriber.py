@@ -701,7 +701,11 @@ class TranscriberApp:
         return f"{h:02d}.{m:02d}.{s:02d}"
 
 
-if __name__ == "__main__":
+def main():
     root = tk.Tk()
     TranscriberApp(root)
     root.mainloop()
+
+
+if __name__ == "__main__":
+    main()

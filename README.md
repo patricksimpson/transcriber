@@ -4,15 +4,33 @@ Transcribe video and audio files to text using AI speech recognition. Runs entir
 
 <img width="718" height="648" alt="image" src="https://github.com/user-attachments/assets/643e5641-33d7-4fce-b194-ad0647f895d8" />
 
-
 ## Download
 
-**[Download Transcriber.zip from Releases](../../releases/latest)**
-~100 MB — Windows 10/11, no install required.
+| Platform | Link |
+|----------|------|
+| Windows (x64) | [Transcriber-windows-x64.zip](../../releases/latest/download/Transcriber-windows-x64.zip) |
+| macOS (Apple Silicon) | [Transcriber-macos-arm64.zip](../../releases/latest/download/Transcriber-macos-arm64.zip) |
+| macOS (Intel) | [Transcriber-macos-x64.zip](../../releases/latest/download/Transcriber-macos-x64.zip) |
+| Linux (x64) | [Transcriber-linux-x64.zip](../../releases/latest/download/Transcriber-linux-x64.zip) |
+
+No install required — download, unzip, and run.
+
+### Windows
 
 1. Download and unzip the folder
 2. Double-click `Transcriber.exe`
 3. If Windows shows "Windows protected your PC" — click **More info** → **Run anyway**
+
+### macOS
+
+1. Download and unzip
+2. Double-click `Transcriber`
+3. If macOS blocks it: System Settings → Privacy & Security → click **Open Anyway**
+
+### Linux
+
+1. Download and unzip
+2. `chmod +x Transcriber && ./Transcriber`
 
 > **First run:** The app downloads a speech recognition model (~150 MB). This only happens once — after that it works offline.
 
@@ -48,26 +66,46 @@ sermon (00.35.00-01.16.56).txt                    # with time range
 sermon (00.35.00-01.16.56) (timestamped).txt
 ```
 
-## Tips
+## Run from Source
 
-- A 1-hour file takes roughly 5–15 minutes with "base.en" on a modern computer
-- Start with **base.en** — only move up if accuracy isn't good enough
-- You can transcribe while the file plays in another app
-- Everything runs locally on your CPU — nothing is uploaded
+Requires Python 3.10+.
 
-## For Developers
+```bash
+git clone https://github.com/patricksimpson/transcriber.git
+cd transcriber
+pip install .
+transcriber
+```
 
-If you want to run from source instead of the exe:
+Or without installing:
 
 ```bash
 pip install -r requirements.txt
 python transcriber.py
 ```
 
-Requires Python 3.9+.
+### GPU Acceleration
+
+On Windows with an NVIDIA GPU, install with GPU support for significantly faster transcription:
+
+```bash
+pip install ".[gpu]"
+```
+
+Or: `pip install -r requirements-gpu.txt`
+
+The app will automatically detect and use your GPU when available. GPU mode uses `float16` precision for best performance.
+
+## Tips
+
+- A 1-hour file takes roughly 5–15 minutes with "base.en" on a modern computer
+- Start with **base.en** — only move up if accuracy isn't good enough
+- You can transcribe while the file plays in another app
+- Everything runs locally on your CPU (or GPU if available) — nothing is uploaded
 
 ## Troubleshooting
 
-- **App won't start:** Make sure you extracted the entire zip, not just the `.exe`. All files must stay together.
+- **App won't start:** Make sure you extracted the entire zip, not just the executable.
 - **Model download hangs:** Check your internet connection. After the first download, no internet is needed.
 - **Poor accuracy:** Try a larger model (`small.en` or `medium.en`).
+- **macOS "damaged" warning:** Run `xattr -cr Transcriber` in Terminal, then try again.

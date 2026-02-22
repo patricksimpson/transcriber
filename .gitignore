@@ -3,3 +3,7 @@ dist/
 __pycache__/
 *.pyc
 *.spec
+*.egg-info/
+.venv/
+venv/
+settings.json
