@@ -25,29 +25,68 @@ for _nvidia_pkg in ("nvidia.cublas", "nvidia.cudnn"):
 
 MEDIA_EXTENSIONS = {'.mp4', '.mp3', '.wav', '.m4a', '.mkv', '.webm', '.ogg', '.flac', '.aac', '.wma'}
 
-# Proper nouns to capitalize in output (multi-word entries first)
-PROPER_NOUNS = [
+# Default proper nouns (used when sermon-style.json is not found)
+_DEFAULT_PROPER_NOUNS = [
+    ("lamb of god", "Lamb of God"),
+    ("son of god", "Son of God"),
+    ("son of man", "Son of Man"),
+    ("king of kings", "King of Kings"),
+    ("lord of lords", "Lord of Lords"),
+    ("prince of peace", "Prince of Peace"),
+    ("word of god", "Word of God"),
+    ("alpha and omega", "Alpha and Omega"),
+    ("most high", "Most High"),
     ("holy spirit", "Holy Spirit"),
     ("holy ghost", "Holy Ghost"),
-    ("brother branham", "Brother Branham"),
-    ("william branham", "William Branham"),
-    ("lee vayle", "Lee Vayle"),
-    ("jesus", "Jesus"),
+    ("i am", "I Am"),
     ("god", "God"),
-    ("christ", "Christ"),
     ("lord", "Lord"),
-    ("bible", "Bible"),
-    ("branham", "Branham"),
-    ("vayle", "Vayle"),
-    ("scripture", "Scripture"),
-    ("moses", "Moses"),
-    ("abraham", "Abraham"),
-    ("israel", "Israel"),
-    ("satan", "Satan"),
+    ("jesus", "Jesus"),
+    ("christ", "Christ"),
+    ("messiah", "Messiah"),
+    ("savior", "Savior"),
+    ("redeemer", "Redeemer"),
+    ("creator", "Creator"),
+    ("almighty", "Almighty"),
+    ("father", "Father"),
 ]
 
-# Seconds of silence between segments to trigger a paragraph break
-PARAGRAPH_GAP = 1.5
+_DEFAULT_PARAGRAPH_GAP = 1.5
+
+# Style file name
+_STYLE_FILENAME = "sermon-style.json"
+
+
+def _load_style():
+    """Load sermon-style.json from (a) script/exe dir or (b) cwd. Returns (proper_nouns, paragraph_gap, path_or_None)."""
+    candidates = []
+    # (a) same dir as script/exe
+    if getattr(sys, 'frozen', False):
+        candidates.append(Path(sys.executable).parent / _STYLE_FILENAME)
+    else:
+        candidates.append(Path(__file__).parent / _STYLE_FILENAME)
+    # (b) current working directory
+    candidates.append(Path.cwd() / _STYLE_FILENAME)
+
+    for path in candidates:
+        if path.is_file():
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+                nouns_by_cat = data.get("proper_nouns", {})
+                flat = []
+                for pairs in nouns_by_cat.values():
+                    flat.extend(tuple(p) for p in pairs)
+                # Sort longest pattern first
+                flat.sort(key=lambda p: len(p[0]), reverse=True)
+                gap = data.get("paragraph_gap", _DEFAULT_PARAGRAPH_GAP)
+                return flat, gap, str(path)
+            except Exception:
+                pass
+
+    return _DEFAULT_PROPER_NOUNS[:], _DEFAULT_PARAGRAPH_GAP, None
+
+
+PROPER_NOUNS, PARAGRAPH_GAP, _STYLE_PATH = _load_style()
 
 # Settings file location
 if getattr(sys, 'frozen', False):
@@ -76,6 +115,10 @@ class TranscriberApp:
 
         self._build_ui()
         self._load_settings()
+        if _STYLE_PATH:
+            self._log(f"Style: {_STYLE_PATH} ({len(PROPER_NOUNS)} rules)\n")
+        else:
+            self._log(f"Style: built-in defaults ({len(PROPER_NOUNS)} rules)\n")
         self._poll_queue()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
 

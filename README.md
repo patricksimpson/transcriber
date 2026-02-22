@@ -96,6 +96,35 @@ Or: `pip install -r requirements-gpu.txt`
 
 The app will automatically detect and use your GPU when available. GPU mode uses `float16` precision for best performance.
 
+## Customizing Style (`sermon-style.json`)
+
+The app automatically capitalizes proper nouns (names, places, scripture references) in transcription output. These rules are loaded from a `sermon-style.json` file.
+
+**Where to put it:** Place `sermon-style.json` next to the executable (or script), or in your current working directory. The app checks both locations and uses the first one found.
+
+**What's inside:** The file contains capitalization rules organized by category, plus a paragraph gap setting:
+
+```json
+{
+  "description": "Scripture and sermon transcription style guide",
+  "paragraph_gap": 1.5,
+  "proper_nouns": {
+    "deity_titles": [["holy spirit", "Holy Spirit"], ["god", "God"], ...],
+    "biblical_persons": [["moses", "Moses"], ["abraham", "Abraham"], ...],
+    "biblical_places": [["jerusalem", "Jerusalem"], ...],
+    "scripture_references": [["old testament", "Old Testament"], ...],
+    "religious_terms": [["baptism", "Baptism"], ...]
+  }
+}
+```
+
+Each rule is a pair: `["lowercase pattern", "Correct Capitalization"]`. Multi-word patterns are automatically matched before shorter ones (longest first), so "Holy Spirit" matches before "Spirit" alone.
+
+- **`paragraph_gap`** — seconds of silence between segments that triggers a paragraph break (default: 1.5)
+- **Categories** — organize however you like; all categories are flattened into one list at load time
+
+To customize: edit `sermon-style.json` to add, remove, or change any rules. If the file is missing, built-in defaults are used. The status bar shows which style file was loaded on startup.
+
 ## Tips
 
 - A 1-hour file takes roughly 5–15 minutes with "base.en" on a modern computer
