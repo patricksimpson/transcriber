@@ -17,6 +17,10 @@ jobs:
             artifact: Transcriber-windows-x64
             exe_name: Transcriber.exe
             gpu: true
+          - os: windows-latest
+            artifact: Transcriber-windows-x64-light
+            exe_name: Transcriber.exe
+            gpu: false
           - os: macos-latest
             artifact: Transcriber-macos-arm64
             exe_name: Transcriber
@@ -46,15 +50,22 @@ jobs:
           pip install -r requirements.txt
 
       - name: Build with PyInstaller
+        shell: bash
         run: |
-          pyinstaller --onefile --windowed --name Transcriber transcriber.py
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            SEP=";"
+          else
+            SEP=":"
+          fi
+          pyinstaller --onefile --windowed --name Transcriber \
+            --add-data "sermon-style.json${SEP}." \
+            transcriber.py
 
       - name: Create zip (Unix)
         if: runner.os != 'Windows'
         run: |
           mkdir -p pkg
           cp -r dist/Transcriber* pkg/
-          cp sermon-style.json pkg/
           cd pkg
           zip -r ../${{ matrix.artifact }}.zip .
 
@@ -64,7 +75,6 @@ jobs:
         run: |
           New-Item -ItemType Directory -Path pkg
           Copy-Item dist\Transcriber.exe pkg\
-          Copy-Item sermon-style.json pkg\
           Compress-Archive -Path pkg\* -DestinationPath ${{ matrix.artifact }}.zip
 
       - uses: actions/upload-artifact@v4
