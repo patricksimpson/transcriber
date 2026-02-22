@@ -17,10 +17,6 @@ jobs:
             artifact: Transcriber-windows-x64
             exe_name: Transcriber.exe
             gpu: true
-          - os: macos-13
-            artifact: Transcriber-macos-x64
-            exe_name: Transcriber
-            gpu: false
           - os: macos-latest
             artifact: Transcriber-macos-arm64
             exe_name: Transcriber
@@ -40,10 +36,14 @@ jobs:
           python-version: '3.12'
 
       - name: Install dependencies
+        shell: bash
         run: |
           python -m pip install --upgrade pip
           pip install pyinstaller
-          pip install -r ${{ matrix.gpu && 'requirements-gpu.txt' || 'requirements.txt' }}
+          if [ "${{ matrix.gpu }}" = "true" ]; then
+            pip install -r requirements-gpu.txt
+          fi
+          pip install -r requirements.txt
 
       - name: Build with PyInstaller
         run: |
@@ -52,14 +52,20 @@ jobs:
       - name: Create zip (Unix)
         if: runner.os != 'Windows'
         run: |
-          cd dist
-          zip -r ../${{ matrix.artifact }}.zip Transcriber*
+          mkdir -p pkg
+          cp dist/Transcriber* pkg/
+          cp sermon-style.json pkg/
+          cd pkg
+          zip -r ../${{ matrix.artifact }}.zip .
 
       - name: Create zip (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Compress-Archive -Path dist\Transcriber.exe -DestinationPath ${{ matrix.artifact }}.zip
+          New-Item -ItemType Directory -Path pkg
+          Copy-Item dist\Transcriber.exe pkg\
+          Copy-Item sermon-style.json pkg\
+          Compress-Archive -Path pkg\* -DestinationPath ${{ matrix.artifact }}.zip
 
       - uses: actions/upload-artifact@v4
         with:
