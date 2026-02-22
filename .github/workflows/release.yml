@@ -53,7 +53,7 @@ jobs:
         if: runner.os != 'Windows'
         run: |
           mkdir -p pkg
-          cp dist/Transcriber* pkg/
+          cp -r dist/Transcriber* pkg/
           cp sermon-style.json pkg/
           cd pkg
           zip -r ../${{ matrix.artifact }}.zip .
