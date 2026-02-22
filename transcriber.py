@@ -189,6 +189,10 @@ class TranscriberApp:
             state="disabled"
         )
         self.stop_btn.pack(side="left")
+        self.reformat_btn = ttk.Button(
+            btn_frame, text="Reformat", command=self._reformat_file
+        )
+        self.reformat_btn.pack(side="left", padx=(4, 0))
 
         # Progress bar + ETA label
         progress_frame = ttk.Frame(self.root)
@@ -678,6 +682,60 @@ class TranscriberApp:
         )
         self._set_status(status_word)
 
+    # ── Reformat ───────────────────────────────────────────────────────
+
+    @staticmethod
+    def _parse_timestamped_file(filepath):
+        """Parse a timestamped transcription file into (start_sec, end_sec, text) tuples."""
+        pattern = re.compile(
+            r'\[(\d{2}):(\d{2}):(\d{2})\s*->\s*(\d{2}):(\d{2}):(\d{2})\]\s+(.*)'
+        )
+        segments = []
+        with open(filepath, 'r', encoding='utf-8') as f:
+            for line in f:
+                m = pattern.match(line.strip())
+                if m:
+                    sh, sm, ss, eh, em, es = (int(x) for x in m.groups()[:6])
+                    text = m.group(7)
+                    segments.append((sh*3600+sm*60+ss, eh*3600+em*60+es, text))
+        return segments
+
+    def _reformat_file(self):
+        """GUI handler: pick a timestamped .txt file, reformat, and save."""
+        initial = self._last_input_dir
+        filepath = filedialog.askopenfilename(
+            initialdir=initial,
+            filetypes=[("Text files", "*.txt"), ("All files", "*.*")],
+        )
+        if not filepath:
+            return
+
+        self._last_input_dir = str(Path(filepath).parent)
+        segments = self._parse_timestamped_file(filepath)
+        if not segments:
+            self._log("Error: No timestamped segments found in file.\n")
+            return
+
+        plain = self._format_plain_output(segments)
+
+        # Determine output path
+        src = Path(filepath)
+        outdir_text = self.outdir_var.get().strip()
+        outdir = Path(outdir_text) if outdir_text and Path(outdir_text).is_dir() else src.parent
+        out_path = outdir / f"{src.stem} (reformatted).txt"
+        out_path.write_text(plain, encoding='utf-8')
+
+        # Show in log
+        self.log.configure(state="normal")
+        self.log.delete("1.0", "end")
+        self.log.insert("end", f"Reformatted: {src.name}\n")
+        self.log.insert("end", f"Segments: {len(segments)}\n")
+        self.log.insert("end", f"Saved: {out_path}\n")
+        self.log.insert("end", "-" * 50 + "\n\n")
+        self.log.insert("end", plain)
+        self.log.configure(state="disabled")
+        self.status_var.set(f"Reformatted → {out_path.name}")
+
     def _get_duration(self, filepath):
         try:
             import av
@@ -702,6 +760,33 @@ class TranscriberApp:
 
 
 def main():
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Video/Audio Transcriber")
+    parser.add_argument("--reformat", metavar="FILE", help="Reformat a timestamped transcription file (CLI mode)")
+    parser.add_argument("-o", "--output", metavar="FILE", help="Output file path (default: alongside input)")
+    args = parser.parse_args()
+
+    if args.reformat:
+        filepath = args.reformat
+        if not os.path.isfile(filepath):
+            print(f"Error: file not found: {filepath}", file=sys.stderr)
+            sys.exit(1)
+        segments = TranscriberApp._parse_timestamped_file(filepath)
+        if not segments:
+            print("Error: no timestamped segments found in file.", file=sys.stderr)
+            sys.exit(1)
+        plain = TranscriberApp._format_plain_output(segments)
+        if args.output:
+            out_path = Path(args.output)
+        else:
+            src = Path(filepath)
+            out_path = src.parent / f"{src.stem} (reformatted).txt"
+        out_path.write_text(plain, encoding="utf-8")
+        print(plain)
+        print(f"\nSaved: {out_path}", file=sys.stderr)
+        return
+
     root = tk.Tk()
     TranscriberApp(root)
     root.mainloop()
